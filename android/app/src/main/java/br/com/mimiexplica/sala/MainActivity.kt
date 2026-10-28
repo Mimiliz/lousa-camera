@@ -78,6 +78,10 @@ class MainActivity : AppCompatActivity() {
     private var otherVia = ""
     private var remoteCam: VideoTrack? = null
     private var remoteScreen: VideoTrack? = null
+    private var remoteAudio: org.webrtc.AudioTrack? = null
+    private var teacherMuted = false   // aluno: o professor desligou meu microfone
+    private var studentMuted = false   // professor: eu desliguei o microfone do aluno
+    private var studentMicOn: Boolean? = null
     private var inCall = false
     private var leaving = false
 
@@ -224,7 +228,7 @@ class MainActivity : AppCompatActivity() {
         // aluno: o Android bloqueia print e gravação de tela deste app
         if (papel == Papel.ALUNO) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        inCall = true; leaving = false
+        inCall = true; leaving = false; teacherMuted = false; studentMuted = false; studentMicOn = null
         val r = Rtc(this); rtc = r
         buildCallUi(r)
         val am = getSystemService(AudioManager::class.java)
@@ -280,7 +284,8 @@ class MainActivity : AppCompatActivity() {
                     camCall?.let { if (it.peer != src) endOther() else it.end() }
                     otherPeer = src; otherVia = meta?.optString("via", "navegador") ?: "navegador"
                     val c = Call(r, s, src, connId, "cam",
-                        onRemoteVideo = { t -> remoteCam = t; layout(); status(statusAluno()) },
+                        onRemoteVideo = { t -> remoteCam = t; layout(); status(statusAluno()); sendCtl(JSONObject().put("mute", studentMuted)); paintStudentMic() },
+                        onRemoteAudio = { a -> remoteAudio = a; a.setEnabled(!studentMuted) },
                         onEnded = { c -> calls.remove(c.connectionId); if (camCall === c) otherLeft() })
                     c.addTracks(listOf(r.camTrack, r.micTrack), "cam")
                     calls[connId] = c; camCall = c
@@ -293,6 +298,7 @@ class MainActivity : AppCompatActivity() {
                 calls[payload.optString("connectionId")]?.onAnswer(sdp)
             }
             "CANDIDATE" -> {
+                payload?.optJSONObject("ctl")?.let { onCtl(src, it); return }
                 val cand = payload?.optJSONObject("candidate") ?: return
                 calls[payload.optString("connectionId")]?.onCandidate(cand)
             }
@@ -302,6 +308,57 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var lastDial = 0L
+
+    /** Recados entre professor e aluno (passam pelo mesmo servidor de encontro). */
+    private fun sendCtl(o: JSONObject) {
+        val p = otherPeer ?: return
+        sig?.send("CANDIDATE", p, JSONObject().put("type", "media").put("connectionId", "ctl").put("ctl", o))
+    }
+    private fun sendMicState() { sendCtl(JSONObject().put("micOn", rtc?.micTrack?.enabled() == true)) }
+
+    private fun onCtl(src: String, c: JSONObject) {
+        if (src != otherPeer) return
+        if (papel == Papel.ALUNO && c.has("mute")) {
+            teacherMuted = c.optBoolean("mute")
+            rtc?.micTrack?.setEnabled(!teacherMuted)
+            paintMic(); sendMicState()
+            toast(if (teacherMuted) "O professor desligou o seu microfone" else "O professor liberou o seu microfone")
+        }
+        if (papel == Papel.PROFESSOR && c.has("micOn")) { studentMicOn = c.optBoolean("micOn"); paintStudentMic() }
+    }
+
+    private fun paintMic() {
+        val on = rtc?.micTrack?.enabled() == true
+        if (teacherMuted) setOn("mic", false, "Microfone", "Mutado pelo professor", Icons.MIC, Icons.MIC_OFF)
+        else setOn("mic", on, "Microfone", "Mudo", Icons.MIC, Icons.MIC_OFF)
+    }
+
+    private fun paintStudentMic() {
+        setOn("mutar", !studentMuted, "Mutar aluno", "Liberar aluno")
+        if (otherPeer != null && remoteCam != null)
+            status(statusAluno() + when {
+                studentMuted -> " · microfone do aluno desligado por você"
+                studentMicOn == false -> " · aluno com microfone desligado"
+                else -> ""
+            })
+    }
+
+    private fun toggleStudentMute() {
+        if (otherPeer == null || remoteCam == null) { toast("Nenhum aluno na sala agora"); return }
+        studentMuted = !studentMuted
+        remoteAudio?.setEnabled(!studentMuted)   // silêncio do seu lado e na gravação
+        sendCtl(JSONObject().put("mute", studentMuted)); paintStudentMic()
+        toast(if (studentMuted) "Microfone do aluno desligado" else "Microfone do aluno liberado")
+    }
+
+    private fun chooseMic() {
+        val r = rtc ?: return
+        val list = r.mics()
+        if (list.isEmpty()) { toast("Nenhum microfone encontrado"); return }
+        AlertDialog.Builder(this).setTitle("Escolher microfone")
+            .setItems(list.map { r.micLabel(it) }.toTypedArray()) { _, i -> r.setMic(list[i]); toast("Microfone: " + r.micLabel(list[i])) }
+            .show()
+    }
 
     /** Aluno: liga para a sala do professor. */
     private fun dial() {
@@ -316,7 +373,7 @@ class MainActivity : AppCompatActivity() {
         val teacher = "mimisala-$sala"
         otherPeer = teacher
         val c = Call(r, s, teacher, "mc_" + rnd(), "cam",
-            onRemoteVideo = { t -> remoteCam = t; layout(); status("Na aula com o professor") },
+            onRemoteVideo = { t -> remoteCam = t; layout(); status("Na aula com o professor"); sendMicState() },
             onEnded = { c ->
                 calls.remove(c.connectionId)
                 if (camCall === c) {
@@ -334,7 +391,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun otherLeft() {
-        camCall = null; remoteCam = null; remoteScreen = null
+        camCall = null; remoteCam = null; remoteScreen = null; remoteAudio = null; studentMicOn = null
         screenCall?.end(); screenCall = null
         otherPeer = null
         layout()
@@ -402,8 +459,10 @@ class MainActivity : AppCompatActivity() {
         btn("mic", Icons.MIC, "Microfone") { toggleMic() }
         btn("cam", Icons.CAMERA, "Câmera") { toggleCam() }
         btn("trocar", Icons.TROCAR, "Trocar câmera") { nextCamera() }
+        btn("micsel", Icons.MIC_TROCAR, "Trocar microfone") { chooseMic() }
         btn("tela", Icons.TELA, "Compartilhar tela") { toggleShare() }
         if (papel == Papel.PROFESSOR) {
+            btn("mutar", Icons.ALUNO_MUDO, "Mutar aluno") { toggleStudentMute() }
             btn("gravar", Icons.GRAVAR, "Gravar aula") { toggleRecord() }
             btn("convidar", Icons.CONVIDAR, "Convidar") { invite() }
         }
@@ -453,9 +512,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun toggleMic() {
+        if (teacherMuted) { toast("O professor desligou o seu microfone. Ele precisa liberar para você falar."); return }
         val t = rtc?.micTrack ?: return
         t.setEnabled(!t.enabled())
-        setOn("mic", t.enabled(), "Microfone", "Mudo", Icons.MIC, Icons.MIC_OFF)
+        paintMic(); sendMicState()
     }
 
     private fun toggleCam() {

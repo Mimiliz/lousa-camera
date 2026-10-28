@@ -41,6 +41,12 @@ button:focus-visible,input:focus-visible,.btn:focus-visible{outline:2px solid va
 input{font:inherit;font-size:22px;letter-spacing:.2em;text-transform:uppercase;text-align:center;background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px}
 .err{color:#ffb3b5;background:rgba(255,74,79,.12);border-radius:10px;padding:10px 12px;font-size:14px}
 .note{font-size:13px;color:var(--muted)}
+button.locked{background:#3a2326;color:#ffb3b5;opacity:.85}
+.panel{position:fixed;inset:0;background:rgba(0,0,0,.6);display:grid;place-items:center;z-index:9;padding:20px}
+.panel > div{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:20px;width:min(420px,100%);display:flex;flex-direction:column;gap:12px}
+.panel h3{margin:0;font-size:18px}
+select{font:inherit;background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:12px}
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#fff;color:#111;padding:10px 16px;border-radius:12px;font-weight:600;z-index:20;max-width:90vw;text-align:center}
 </style>
 </head>
 <body>
@@ -67,12 +73,19 @@ input{font:inherit;font-size:22px;letter-spacing:.2em;text-transform:uppercase;t
 </div>
 <div class="bar" id="bar" hidden>
   <button id="micBtn">Microfone ligado</button>
+  <button id="micSelBtn">Trocar microfone</button>
   <button id="camBtn">Câmera ligada</button>
   <button id="flipBtn">Trocar câmera</button>
   <button id="screenBtn" hidden>Compartilhar minha tela</button>
   <button class="end" id="endBtn">Sair</button>
 </div>
 
+<div class="panel" id="micPanel" hidden><div>
+  <h3>Escolher microfone</h3>
+  <select id="micSel" aria-label="Microfone"></select>
+  <div style="display:flex;gap:8px"><button id="micCancel">Cancelar</button><button class="go" id="micOk">Usar este</button></div>
+</div></div>
+<div class="toast" id="toast" hidden></div>
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 (() => {
@@ -83,7 +96,27 @@ const srv = q.get('srv');   // só para testes com servidor próprio
 const peerOpts = srv ? {host: srv.split(':')[0], port: +(srv.split(':')[1] || 9000), path: '/', secure: false} : {};
 const HOST = () => 'mimisala-' + sala;
 let stream = null, peer = null, camCall = null, myScreen = null, myScreenCall = null, profCam = null, profScreen = null;
-let facing = 'user', ended = false, retry = null;
+let facing = 'user', ended = false, retry = null, teacherMuted = false, toastT = null;
+const toast = t => { const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => e.hidden = true, 3500); };
+
+/* recados entre professor e aluno (passam pelo mesmo servidor de encontro) */
+function sendCtl(obj){ try{ peer && peer.open && peer.socket.send({type: 'CANDIDATE', dst: HOST(), payload: {type: 'media', connectionId: 'ctl', ctl: obj}}); }catch(e){} }
+function sendMicState(){ const t = stream && stream.getAudioTracks()[0]; sendCtl({micOn: !!(t && t.enabled)}); }
+function onCtl(c){
+  if (typeof c.mute !== 'boolean') return;
+  teacherMuted = c.mute;
+  const t = stream && stream.getAudioTracks()[0];
+  if (t) t.enabled = !c.mute;
+  paintMic();
+  toast(c.mute ? 'O professor desligou o seu microfone' : 'O professor liberou o seu microfone');
+  sendMicState();
+}
+function paintMic(){
+  const t = stream && stream.getAudioTracks()[0], on = !!(t && t.enabled);
+  const b = $('#micBtn');
+  b.classList.toggle('locked', teacherMuted); b.classList.toggle('off', !on && !teacherMuted);
+  b.textContent = teacherMuted ? 'Mutado pelo professor' : on ? 'Microfone ligado' : 'Microfone desligado';
+}
 
 const setStatus = (t, on) => { $('#statusBox').hidden = false; $('#status').textContent = t; $('#dot').classList.toggle('on', !!on); };
 const showErr = t => { $('#err').hidden = false; $('#err').textContent = t; };
@@ -144,6 +177,7 @@ function connect(){
   if (ended) return;
   setStatus('Conectando…');
   peer = new Peer(peerOpts);
+  peer.socket.on('message', m => { if (m && m.type === 'CANDIDATE' && m.payload && m.payload.ctl && m.src === HOST()) onCtl(m.payload.ctl); });
   peer.on('open', () => dial());
   peer.on('disconnected', () => { if (!ended) try{ peer.reconnect(); }catch(e){} });
   peer.on('error', e => {
@@ -173,15 +207,37 @@ function dial(){
   if (camCall){ try{ camCall.close(); }catch(e){} }
   camCall = peer.call(HOST(), stream, {metadata: {kind: 'cam', via: 'navegador'}});
   if (!camCall){ schedule(); return; }
-  camCall.on('stream', s => { profCam = s; layout(); setStatus('Na aula com o professor', true); });
+  camCall.on('stream', s => { profCam = s; layout(); setStatus('Na aula com o professor', true); sendMicState(); });
   camCall.on('close', () => { profCam = null; profScreen = null; layout(); if (!ended){ setStatus('A conexão caiu. Reconectando…'); schedule(); } });
   camCall.on('error', () => schedule());
   setTimeout(() => { if (camCall && !camCall.open && !ended){ setStatus('O professor ainda não abriu a sala…'); dial(); } }, 9000);
 }
 
 $('#micBtn').onclick = () => {
+  if (teacherMuted){ toast('O professor desligou o seu microfone. Ele precisa liberar para você falar.'); return; }
   const t = stream.getAudioTracks()[0]; if (!t) return; t.enabled = !t.enabled;
-  $('#micBtn').textContent = t.enabled ? 'Microfone ligado' : 'Microfone desligado'; $('#micBtn').classList.toggle('off', !t.enabled);
+  paintMic(); sendMicState();
+};
+$('#micSelBtn').onclick = async () => {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+  const cur = stream.getAudioTracks()[0] ? stream.getAudioTracks()[0].getSettings().deviceId : '';
+  $('#micSel').innerHTML = devs.map((d, i) => `<option value="${d.deviceId}" ${d.deviceId === cur ? 'selected' : ''}>${(d.label || 'Microfone ' + (i + 1)).replace(/</g, '&lt;')}</option>`).join('');
+  $('#micPanel').hidden = false;
+};
+$('#micCancel').onclick = () => { $('#micPanel').hidden = true; };
+$('#micOk').onclick = async () => {
+  $('#micPanel').hidden = true;
+  const id = $('#micSel').value;
+  try{
+    const ns = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: id}, echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+    const nt = ns.getAudioTracks()[0], old = stream.getAudioTracks()[0];
+    nt.enabled = teacherMuted ? false : (old ? old.enabled : true);
+    if (old){ stream.removeTrack(old); old.stop(); }
+    stream.addTrack(nt);
+    const snd = camCall && camCall.peerConnection && camCall.peerConnection.getSenders().find(x => x.track ? x.track.kind === 'audio' : false);
+    if (snd) await snd.replaceTrack(nt);
+    toast('Microfone trocado');
+  }catch(e){ toast('Não consegui usar esse microfone'); }
 };
 $('#camBtn').onclick = () => {
   const t = stream.getVideoTracks()[0]; if (!t) return; t.enabled = !t.enabled;

@@ -21,6 +21,8 @@ const ICON = {
   gravar: 'M12 4a8 8 0 1 1 0 16a8 8 0 1 1 0-16z',
   convidar: 'M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M19 8v6M16 11h6',
   mini: 'M3 5h18v14H3z M12 12h7v5h-7z',
+  micSel: 'M9 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M3 10a6 6 0 0 0 12 0 M9 16v4 M17 8l3 3-3 3 M20 11h-5',
+  alunoMudo: 'M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M16 9l5 5M21 9l-5 5',
   sair: 'M10 17l5-5-5-5 M15 12H3 M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5'
 };
 const svg = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
@@ -38,6 +40,38 @@ let remoteCam = null, remoteScreen = null, myScreen = null;
 let inCall = false, leaving = false, lastDial = 0;
 let recorder = null, recScreen = null, recCtx = null, recDest = null, recStart = 0, recTimer = null, remoteAudioNode = null;
 let miniOn = false;
+let teacherMuted = false;     // aluno: o professor desligou meu microfone
+let studentMuted = false;     // professor: eu desliguei o microfone do aluno
+let studentMicOn = null;      // professor: o aluno está com o microfone ligado?
+let localMicNode = null;
+
+/* recados entre professor e aluno (passam pelo mesmo servidor de encontro) */
+function sendCtl(obj){
+  try{ if (peer && peer.open && otherPeer) peer.socket.send({type: 'CANDIDATE', dst: otherPeer, payload: {type: 'media', connectionId: 'ctl', ctl: obj}}); }catch(e){}
+}
+function sendMicState(){ const t = local && local.getAudioTracks()[0]; sendCtl({micOn: !!(t && t.enabled)}); }
+function onCtl(src, c){
+  if (src !== otherPeer) return;
+  if (papel === 'aluno' && typeof c.mute === 'boolean'){
+    teacherMuted = c.mute;
+    const t = local && local.getAudioTracks()[0]; if (t) t.enabled = !c.mute;
+    paintMic(); sendMicState();
+    toast(c.mute ? 'O professor desligou o seu microfone' : 'O professor liberou o seu microfone');
+  }
+  if (papel === 'professor' && typeof c.micOn === 'boolean'){ studentMicOn = c.micOn; paintStudentMic(); }
+}
+function paintMic(){
+  const t = local && local.getAudioTracks()[0], on = !!(t && t.enabled);
+  if (teacherMuted) setBtn('mic', 'Mutado pelo professor', 'off', ICON.micOff);
+  else setBtn('mic', on ? 'Microfone' : 'Mudo', on ? '' : 'off', on ? ICON.mic : ICON.micOff);
+}
+function paintStudentMic(){
+  setBtn('mutar', studentMuted ? 'Liberar aluno' : 'Mutar aluno', studentMuted ? 'off' : '');
+  if (otherPeer && remoteCam) setStatus(statusAluno() + (studentMuted ? ' · microfone do aluno desligado por você' : studentMicOn === false ? ' · aluno com microfone desligado' : ''));
+}
+function applyStudentMute(){
+  if (remoteCam) remoteCam.getAudioTracks().forEach(t => t.enabled = !studentMuted);   // silêncio do seu lado e na gravação
+}
 
 /* ================= início ================= */
 $('#codeIn').value = store.get('codigoAluno', '');
@@ -60,7 +94,7 @@ async function start(p, code){
   try{
     local = await navigator.mediaDevices.getUserMedia({
       video: camConstraints(store.get('camera', '')),
-      audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
+      audio: Object.assign({echoCancellation: true, noiseSuppression: true, autoGainControl: true}, store.get('mic', '') ? {deviceId: {ideal: store.get('mic', '')}} : {})
     });
   }catch(e){
     try{ local = await navigator.mediaDevices.getUserMedia({audio: true, video: false}); toast('Câmera não encontrada: entrando só com o microfone'); }
@@ -68,7 +102,7 @@ async function start(p, code){
   }
   if (papel === 'aluno' && api.protect) api.protect(true);   // print e gravação de tela ficam pretos
   if (papel === 'professor' && api.protect) api.protect(false);
-  inCall = true; leaving = false;
+  inCall = true; leaving = false; teacherMuted = false; studentMuted = false; studentMicOn = null;
   $('#home').hidden = true; $('#call').hidden = false;
   $('#me').srcObject = local;
   buildBar(); layout();
@@ -98,6 +132,7 @@ function connect(){
     else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error'){ setStatus('Sem internet. Tentando de novo…'); }
   });
   peer.on('call', onIncoming);
+  peer.socket.on('message', m => { if (m && m.type === 'CANDIDATE' && m.payload && m.payload.ctl) onCtl(m.src, m.payload.ctl); });
 }
 
 function onIncoming(call){
@@ -114,7 +149,7 @@ function onIncoming(call){
   otherPeer = call.peer; otherVia = meta.via || 'navegador';
   camCall = call;
   call.answer(local);
-  call.on('stream', s => { remoteCam = s; layout(); setStatus(statusAluno()); hookRemoteAudio(); });
+  call.on('stream', s => { remoteCam = s; layout(); applyStudentMute(); setStatus(statusAluno()); hookRemoteAudio(); sendCtl({mute: studentMuted}); paintStudentMic(); });
   call.on('close', () => { if (camCall === call) otherLeft(); });
   if (myScreen) setTimeout(startScreenCall, 1500);
 }
@@ -133,13 +168,14 @@ function dial(){
   const c = peer.call(otherPeer, local, {metadata: {kind: 'cam', via: 'computador'}});
   if (!c) return;
   camCall = c;
-  c.on('stream', s => { remoteCam = s; layout(); setStatus('Na aula com o professor'); });
+  c.on('stream', s => { remoteCam = s; layout(); setStatus('Na aula com o professor'); sendMicState(); });
   c.on('close', () => { if (camCall === c){ camCall = null; remoteCam = null; remoteScreen = null; layout(); if (inCall && !leaving){ setStatus('A conexão caiu. Reconectando…'); setTimeout(dial, 3000); } } });
   setTimeout(() => { if (camCall === c && !remoteCam && inCall){ setStatus('O professor ainda não abriu a sala…'); dial(); } }, 10000);
   if (myScreen) setTimeout(startScreenCall, 1500);
 }
 
 function otherLeft(){
+  studentMicOn = null;
   camCall = null; remoteCam = null; remoteScreen = null;
   if (screenCall){ try{ screenCall.close(); }catch(e){} screenCall = null; }
   otherPeer = null; layout();
@@ -169,8 +205,10 @@ function buildBar(){
   add('mic', ICON.mic, 'Microfone', toggleMic);
   add('cam', ICON.cam, 'Câmera', toggleCam);
   add('trocar', ICON.trocar, 'Trocar câmera', chooseCamera);
+  add('micsel', ICON.micSel, 'Trocar microfone', chooseMic);
   add('tela', ICON.tela, 'Compartilhar tela', toggleShare);
   if (papel === 'professor'){
+    add('mutar', ICON.alunoMudo, 'Mutar aluno', toggleStudentMute);
     add('gravar', ICON.gravar, 'Gravar aula', toggleRecord);
     add('convidar', ICON.convidar, 'Convidar', invite);
   }
@@ -185,8 +223,38 @@ function setBtn(key, label, cls, icon){
 }
 
 function toggleMic(){
+  if (teacherMuted){ toast('O professor desligou o seu microfone. Ele precisa liberar para você falar.'); return; }
   const t = local.getAudioTracks()[0]; if (!t) return; t.enabled = !t.enabled;
-  setBtn('mic', t.enabled ? 'Microfone' : 'Mudo', t.enabled ? '' : 'off', t.enabled ? ICON.mic : ICON.micOff);
+  paintMic(); sendMicState();
+}
+function toggleStudentMute(){
+  if (!otherPeer || !remoteCam){ toast('Nenhum aluno na sala agora'); return; }
+  studentMuted = !studentMuted;
+  applyStudentMute(); sendCtl({mute: studentMuted}); paintStudentMic();
+  toast(studentMuted ? 'Microfone do aluno desligado' : 'Microfone do aluno liberado');
+}
+async function chooseMic(){
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'audioinput');
+  if (!devs.length){ toast('Nenhum microfone encontrado'); return; }
+  const at = local.getAudioTracks()[0];
+  const cur = at ? at.getSettings().deviceId : '';
+  const box = modal(`<h3>Escolher microfone</h3><select id="micSel">${devs.map((d, i) => `<option value="${d.deviceId}" ${d.deviceId === cur ? 'selected' : ''}>${esc(d.label || 'Microfone ' + (i + 1))}</option>`).join('')}</select>
+    <div class="row"><button id="mCancel">Cancelar</button><button class="go" id="mOk">Usar este</button></div>`);
+  box.querySelector('#mCancel').onclick = closeModal;
+  box.querySelector('#mOk').onclick = async () => {
+    const id = box.querySelector('#micSel').value; closeModal();
+    try{
+      const ns = await navigator.mediaDevices.getUserMedia({audio: {deviceId: {exact: id}, echoCancellation: true, noiseSuppression: true, autoGainControl: true}});
+      const nt = ns.getAudioTracks()[0], old = local.getAudioTracks()[0];
+      nt.enabled = teacherMuted ? false : (old ? old.enabled : true);
+      if (old){ local.removeTrack(old); old.stop(); }
+      local.addTrack(nt); store.set('mic', id);
+      const snd = camCall && camCall.peerConnection && camCall.peerConnection.getSenders().find(x => x.track && x.track.kind === 'audio');
+      if (snd) await snd.replaceTrack(nt);
+      hookLocalMic();
+      toast('Microfone trocado');
+    }catch(e){ toast('Não consegui usar esse microfone'); }
+  };
 }
 function toggleCam(){
   const t = local.getVideoTracks()[0]; if (!t) return; t.enabled = !t.enabled;
@@ -259,6 +327,12 @@ function toggleMini(){
 }
 
 /* ================= gravar (só o professor) ================= */
+function hookLocalMic(){
+  if (!recCtx || !recDest || !local) return;
+  try{ if (localMicNode) localMicNode.disconnect(); }catch(e){}
+  localMicNode = null;
+  if (local.getAudioTracks().length){ localMicNode = recCtx.createMediaStreamSource(new MediaStream(local.getAudioTracks())); localMicNode.connect(recDest); }
+}
 function hookRemoteAudio(){
   if (!recCtx || !recDest || !remoteCam || !remoteCam.getAudioTracks().length) return;
   try{ if (remoteAudioNode) remoteAudioNode.disconnect(); }catch(e){}
@@ -273,7 +347,7 @@ async function toggleRecord(){
   }catch(e){ toast('Não consegui gravar a tela'); return; }
   recCtx = new AudioContext({sampleRate: 48000});
   recDest = recCtx.createMediaStreamDestination();
-  if (local.getAudioTracks().length) recCtx.createMediaStreamSource(new MediaStream(local.getAudioTracks())).connect(recDest);
+  hookLocalMic();
   hookRemoteAudio();
   const types = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp9,opus', 'video/webm'];
   const mime = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
@@ -300,7 +374,7 @@ function stopRecord(){
   try{ recorder.stop(); }catch(e){}
   recorder = null;
   if (recScreen){ recScreen.getTracks().forEach(t => t.stop()); recScreen = null; }
-  setTimeout(() => { try{ recCtx && recCtx.close(); }catch(e){} recCtx = null; recDest = null; remoteAudioNode = null; }, 1500);
+  setTimeout(() => { try{ recCtx && recCtx.close(); }catch(e){} recCtx = null; recDest = null; remoteAudioNode = null; localMicNode = null; }, 1500);
   clearInterval(recTimer); $('#recTag').hidden = true;
   setBtn('gravar', 'Gravar aula', '');
 }

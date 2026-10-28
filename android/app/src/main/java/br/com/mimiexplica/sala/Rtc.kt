@@ -2,6 +2,8 @@ package br.com.mimiexplica.sala
 
 import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
 import org.json.JSONObject
@@ -33,6 +35,7 @@ class Rtc(private val ctx: Context) {
     @Volatile var micSink: ((JavaAudioDeviceModule.AudioSamples) -> Unit)? = null
 
     val factory: PeerConnectionFactory
+    private val adm: JavaAudioDeviceModule
     val config: PeerConnection.RTCConfiguration
 
     private val enumerator = Camera2Enumerator(ctx)
@@ -48,7 +51,7 @@ class Rtc(private val ctx: Context) {
 
     init {
         PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(ctx).createInitializationOptions())
-        val adm = JavaAudioDeviceModule.builder(ctx)
+        adm = JavaAudioDeviceModule.builder(ctx)
             // som tocado como "mídia": assim a gravação do professor consegue capturar a voz do aluno
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -88,6 +91,32 @@ class Rtc(private val ctx: Context) {
     }
 
     fun isFront(name: String?) = name != null && enumerator.isFrontFacing(name)
+
+    /** Microfones ligados ao aparelho (do próprio aparelho, fone, USB, Bluetooth). */
+    fun mics(): List<AudioDeviceInfo> {
+        val am = ctx.getSystemService(AudioManager::class.java)
+        return am.getDevices(AudioManager.GET_DEVICES_INPUTS).filter {
+            it.type in setOf(AudioDeviceInfo.TYPE_BUILTIN_MIC, AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE,
+                AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_USB_ACCESSORY)
+        }.distinctBy { it.type.toString() + it.productName }
+    }
+
+    fun micLabel(d: AudioDeviceInfo): String = when (d.type) {
+        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Microfone do aparelho"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Fone com fio"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth (${d.productName})"
+        else -> "Microfone USB (${d.productName})"
+    }
+
+    fun setMic(d: AudioDeviceInfo) {
+        adm.setPreferredInputDevice(d)
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            val am = ctx.getSystemService(AudioManager::class.java)
+            if (d.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || d.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || d.type == AudioDeviceInfo.TYPE_USB_HEADSET) {
+                am.availableCommunicationDevices.firstOrNull { it.type == d.type }?.let { am.setCommunicationDevice(it) }
+            } else am.clearCommunicationDevice()
+        }
+    }
 
     fun startCamera(preferred: String?) {
         val names = cameras()
@@ -134,6 +163,7 @@ class Call(
     val connectionId: String,
     val kind: String,
     private val onRemoteVideo: (VideoTrack) -> Unit,
+    private val onRemoteAudio: (AudioTrack) -> Unit = {},
     private val onEnded: (Call) -> Unit
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -170,6 +200,7 @@ class Call(
         override fun onAddTrack(receiver: RtpReceiver?, streams: Array<out MediaStream>?) {
             val t = receiver?.track()
             if (t is VideoTrack) main.post { if (!closed) onRemoteVideo(t) }
+            if (t is AudioTrack) main.post { if (!closed) onRemoteAudio(t) }
         }
     }
 

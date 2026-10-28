@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#14161b">
-<title>Câmera da Lousa</title>
+<title>Sala Mimi Explica</title>
 <style>
 :root{--bg:#0d0f13;--panel:#1d2027;--raised:#272b34;--line:#323744;--fg:#eceef2;--muted:#8e96a5;--accent:#37c99a;--rec:#ff4a4f;
   --font:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color-scheme:dark}
@@ -13,48 +13,64 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:16px/1.45 var(--font);display:flex;flex-direction:column;
   padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
-header{padding:14px max(16px,env(safe-area-inset-left,0px)) 10px;display:flex;align-items:center;gap:10px}
+header{padding:12px max(16px,env(safe-area-inset-left,0px));display:flex;align-items:center;gap:10px}
 header b{font-size:18px}
 header small{color:var(--muted)}
-.stage{flex:1;min-height:0;position:relative;background:#000;margin:0 max(12px,env(safe-area-inset-left,0px));border-radius:18px;overflow:hidden}
-video{width:100%;height:100%;object-fit:cover;display:block}
-.badge{position:absolute;top:12px;left:12px;background:rgba(0,0,0,.6);padding:6px 12px;border-radius:999px;font-size:14px;display:flex;gap:8px;align-items:center}
-.dot{width:10px;height:10px;border-radius:50%;background:var(--muted)}
-.dot.on{background:var(--rec);animation:p 1.2s infinite}
-@keyframes p{50%{opacity:.35}}
-.bar{display:flex;gap:10px;padding:12px max(16px,env(safe-area-inset-left,0px)) 16px;flex-wrap:wrap}
-button{font:inherit;font-weight:600;border:0;border-radius:14px;min-height:50px;padding:0 18px;cursor:pointer;color:var(--fg);background:var(--raised);flex:1}
-button.go{background:var(--accent);color:#06281d}
-button.stop{background:transparent;box-shadow:inset 0 0 0 1px var(--line);color:var(--muted)}
-button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.card{margin:auto;max-width:440px;width:calc(100% - 32px);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;display:flex;flex-direction:column;gap:14px}
-.card h1{margin:0;font-size:22px}
+.status{margin-left:auto;font-size:14px;color:var(--muted);display:flex;align-items:center;gap:8px;text-align:right}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none}
+.dot.on{background:var(--accent)}
+.stage{flex:1;min-height:0;position:relative;background:#000;margin:0 max(10px,env(safe-area-inset-left,0px));border-radius:16px;overflow:hidden}
+.stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.stage video.cam{object-fit:cover}
+.mini{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:8px;z-index:2}
+.mini video{position:static;width:clamp(96px,26vw,200px);aspect-ratio:3/4;object-fit:cover;border-radius:12px;border:2px solid rgba(255,255,255,.85);background:#111}
+.mini video.me{transform:scaleX(-1)}
+.wait{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);padding:20px}
+.bar{display:flex;gap:8px;padding:10px max(12px,env(safe-area-inset-left,0px)) 14px;flex-wrap:wrap}
+button,.btn{font:inherit;font-weight:600;border:0;border-radius:14px;min-height:50px;padding:0 16px;cursor:pointer;color:var(--fg);background:var(--raised);flex:1;
+  display:inline-flex;align-items:center;justify-content:center;text-decoration:none;text-align:center}
+button.off{background:#3a2326;color:#ffb3b5}
+button.go,.btn.go{background:var(--accent);color:#06281d}
+button.end{background:var(--rec);color:#fff}
+button:focus-visible,input:focus-visible,.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.card{margin:auto;max-width:460px;width:calc(100% - 32px);background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;display:flex;flex-direction:column;gap:14px}
+.card h1{margin:0;font-size:22px;text-wrap:balance}
 .card p{margin:0;color:var(--muted)}
+.or{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px}
+.or::before,.or::after{content:"";flex:1;height:1px;background:var(--line)}
 input{font:inherit;font-size:22px;letter-spacing:.2em;text-transform:uppercase;text-align:center;background:var(--raised);color:var(--fg);border:1px solid var(--line);border-radius:12px;padding:12px}
 .err{color:#ffb3b5;background:rgba(255,74,79,.12);border-radius:10px;padding:10px 12px;font-size:14px}
-@media (prefers-reduced-motion:reduce){.dot.on{animation:none}}
+.note{font-size:13px;color:var(--muted)}
 </style>
 </head>
 <body>
-<header><b>Câmera da Lousa</b><small id="salaLbl"></small></header>
+<header><b>Sala Mimi Explica</b><small id="salaLbl"></small><span class="status" id="statusBox" hidden><span class="dot" id="dot"></span><span id="status"></span></span></header>
 
 <div class="card" id="intro">
-  <h1>Mostrar sua câmera na lousa do professor</h1>
-  <p id="introTxt">A imagem da sua câmera vai aparecer ao vivo na lousa do Mimi Explica. Nada é instalado no seu celular.</p>
-  <input id="code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" hidden>
+  <h1>Entrar na aula</h1>
+  <p id="introTxt">Você e o professor vão se ver e conversar ao vivo.</p>
+  <input id="code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" hidden aria-label="Código da sala">
   <div class="err" id="err" hidden></div>
-  <button class="go" id="startBtn">Ligar minha câmera</button>
+  <a class="btn go" id="appBtn" href="#">Entrar pelo app (Android)</a>
+  <p class="note">Primeira vez? <a href="https://github.com/Mimiliz/lousa-camera/releases/latest/download/SalaMimi.apk" style="color:var(--accent)">Baixe o app Sala Mimi Explica</a>, instale e volte a este link.</p>
+  <div class="or">ou</div>
+  <button id="startBtn">Entrar pelo navegador</button>
 </div>
 
 <div class="stage" id="stage" hidden>
-  <video id="me" playsinline autoplay muted></video>
-  <div class="badge"><span class="dot" id="dot"></span><span id="status">Conectando…</span></div>
+  <video id="big" class="cam" playsinline autoplay></video>
+  <div class="wait" id="wait">Esperando o professor…</div>
+  <div class="mini">
+    <video id="profSmall" playsinline autoplay muted hidden></video>
+    <video id="me" class="me" playsinline autoplay muted></video>
+  </div>
 </div>
-<audio id="prof" autoplay playsinline></audio>
 <div class="bar" id="bar" hidden>
+  <button id="micBtn">Microfone ligado</button>
+  <button id="camBtn">Câmera ligada</button>
   <button id="flipBtn">Trocar câmera</button>
-  <button id="muteBtn">Desligar meu som</button>
-  <button class="stop" id="endBtn">Encerrar</button>
+  <button id="screenBtn" hidden>Compartilhar minha tela</button>
+  <button class="end" id="endBtn">Sair</button>
 </div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
@@ -63,34 +79,56 @@ input{font:inherit;font-size:22px;letter-spacing:.2em;text-transform:uppercase;t
 const $ = s => document.querySelector(s);
 const q = new URLSearchParams(location.search);
 let sala = (q.get('sala') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-const srv = q.get('srv');   // só para testes: servidor PeerJS próprio
+const srv = q.get('srv');   // só para testes com servidor próprio
 const peerOpts = srv ? {host: srv.split(':')[0], port: +(srv.split(':')[1] || 9000), path: '/', secure: false} : {};
-let stream = null, peer = null, call = null, facing = 'environment', muted = false, ended = false, retry = null;
+const HOST = () => 'mimisala-' + sala;
+let stream = null, peer = null, camCall = null, myScreen = null, myScreenCall = null, profCam = null, profScreen = null;
+let facing = 'user', ended = false, retry = null;
 
-if (sala){ $('#salaLbl').textContent = 'Sala ' + sala; }
-else { $('#code').hidden = false; $('#introTxt').textContent = 'Digite o código que o professor passou para você.'; }
+const setStatus = (t, on) => { $('#statusBox').hidden = false; $('#status').textContent = t; $('#dot').classList.toggle('on', !!on); };
+const showErr = t => { $('#err').hidden = false; $('#err').textContent = t; };
 
-function setStatus(t, live){ $('#status').textContent = t; $('#dot').classList.toggle('on', !!live); }
-function showErr(t){ $('#err').hidden = false; $('#err').textContent = t; }
+function appLink(){
+  return 'intent://entrar?sala=' + encodeURIComponent(sala) + '#Intent;scheme=mimisala;package=br.com.mimiexplica.sala;S.browser_fallback_url=' +
+    encodeURIComponent('https://github.com/Mimiliz/lousa-camera/releases/latest/download/SalaMimi.apk') + ';end';
+}
+function refreshIntro(){
+  $('#salaLbl').textContent = sala ? 'Sala ' + sala : '';
+  $('#appBtn').href = sala ? appLink() : '#';
+  const android = /Android/i.test(navigator.userAgent);
+  $('#appBtn').hidden = !android; $('#appBtn').nextElementSibling.hidden = !android;
+  document.querySelector('.or').hidden = !android;
+}
+if (!sala){ $('#code').hidden = false; $('#introTxt').textContent = 'Digite o código que o professor passou para você.'; }
+$('#code').addEventListener('input', () => { sala = $('#code').value.toUpperCase().replace(/[^A-Z0-9]/g, ''); refreshIntro(); });
+$('#appBtn').addEventListener('click', e => { if (sala.length < 4){ e.preventDefault(); showErr('Digite o código completo.'); } });
+refreshIntro();
 
-async function getStream(){
-  return navigator.mediaDevices.getUserMedia({
-    video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}, frameRate: {ideal: 30}},
-    audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
-  });
+/* ---- telas: o que aparece grande ---- */
+function layout(){
+  const big = $('#big'), small = $('#profSmall');
+  if (profScreen){
+    big.srcObject = profScreen; big.className = '';
+    small.hidden = !profCam; if (profCam) small.srcObject = profCam;
+  } else if (profCam){
+    big.srcObject = profCam; big.className = 'cam'; small.hidden = true;
+  } else { big.srcObject = null; small.hidden = true; }
+  $('#wait').hidden = !!(profScreen || profCam);
+  big.play().catch(() => {});
 }
 
 $('#startBtn').onclick = async () => {
-  if (!sala){
-    sala = $('#code').value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (sala.length < 4){ showErr('Digite o código completo.'); return; }
-    $('#salaLbl').textContent = 'Sala ' + sala;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showErr('Este navegador não libera a câmera. Abra o link no Chrome ou no Safari.'); return; }
-  try{ stream = await getStream(); }
-  catch(e){ showErr('A câmera não foi liberada. Toque no cadeado ao lado do endereço, permita câmera e microfone e tente de novo.'); return; }
+  if (sala.length < 4){ showErr('Digite o código completo.'); return; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ showErr('Este navegador não libera a câmera. Use o Chrome, o Edge ou o Safari.'); return; }
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}},
+      audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}
+    });
+  }catch(e){ showErr('A câmera e o microfone não foram liberados. Toque no cadeado ao lado do endereço, permita e tente de novo.'); return; }
   $('#me').srcObject = stream;
   $('#intro').hidden = true; $('#stage').hidden = false; $('#bar').hidden = false;
+  $('#screenBtn').hidden = !(navigator.mediaDevices.getDisplayMedia && !/Android|iPhone|iPad/i.test(navigator.userAgent));
   try{ navigator.wakeLock && navigator.wakeLock.request('screen').catch(()=>{}); }catch(e){}
   connect();
 };
@@ -98,50 +136,82 @@ $('#startBtn').onclick = async () => {
 function connect(){
   if (ended) return;
   setStatus('Conectando…');
-  if (!peer || peer.destroyed){
-    peer = new Peer(peerOpts);
-    peer.on('open', () => dial());
-    peer.on('disconnected', () => { if (!ended) peer.reconnect(); });
-    peer.on('error', e => {
-      if (e.type === 'peer-unavailable') setStatus('A lousa do professor ainda não está aberta. Tentando de novo…');
-      else setStatus('Sem conexão. Tentando de novo…');
-      schedule();
+  peer = new Peer(peerOpts);
+  peer.on('open', () => dial());
+  peer.on('disconnected', () => { if (!ended) try{ peer.reconnect(); }catch(e){} });
+  peer.on('error', e => {
+    if (e.type === 'peer-unavailable') setStatus('O professor ainda não abriu a sala…');
+    else if (e.type !== 'negotiation-failed') setStatus('Sem conexão. Tentando de novo…');
+    schedule();
+  });
+  // o professor liga para mostrar a tela dele
+  peer.on('call', call => {
+    const kind = (call.metadata && call.metadata.kind) || 'screen';
+    call.answer();
+    call.on('stream', s => {
+      if (kind === 'screen'){ profScreen = s; watchEnd(s, () => { profScreen = null; layout(); }); }
+      layout();
     });
-  } else if (peer.open) dial();
+    call.on('close', () => { if (kind === 'screen'){ profScreen = null; layout(); } });
+  });
 }
-function schedule(){ clearTimeout(retry); retry = setTimeout(() => { if (!call || !call.open) dial(); }, 3000); }
+function watchEnd(s, done){
+  const t = s.getVideoTracks()[0]; if (!t) return;
+  t.addEventListener('ended', done);
+  t.addEventListener('mute', () => setTimeout(() => { if (t.muted) done(); }, 2500));
+}
+function schedule(){ clearTimeout(retry); retry = setTimeout(() => { if (!camCall || !camCall.open) dial(); }, 3000); }
 function dial(){
   if (ended || !peer || !peer.open) return;
-  if (call){ try{ call.close(); }catch(e){} }
-  call = peer.call('mimilousa-' + sala, stream);
-  if (!call){ schedule(); return; }
-  call.on('stream', s => { $('#prof').srcObject = s; setStatus('Ao vivo na lousa', true); });
-  call.on('close', () => { if (!ended){ setStatus('A conexão caiu. Tentando de novo…'); schedule(); } });
-  call.on('error', () => schedule());
-  setTimeout(() => { if (call && !call.open && !ended){ setStatus('A lousa do professor ainda não está aberta. Tentando de novo…'); dial(); } }, 8000);
+  if (camCall){ try{ camCall.close(); }catch(e){} }
+  camCall = peer.call(HOST(), stream, {metadata: {kind: 'cam', via: 'navegador'}});
+  if (!camCall){ schedule(); return; }
+  camCall.on('stream', s => { profCam = s; layout(); setStatus('Na aula com o professor', true); });
+  camCall.on('close', () => { profCam = null; profScreen = null; layout(); if (!ended){ setStatus('A conexão caiu. Reconectando…'); schedule(); } });
+  camCall.on('error', () => schedule());
+  setTimeout(() => { if (camCall && !camCall.open && !ended){ setStatus('O professor ainda não abriu a sala…'); dial(); } }, 9000);
 }
 
+$('#micBtn').onclick = () => {
+  const t = stream.getAudioTracks()[0]; if (!t) return; t.enabled = !t.enabled;
+  $('#micBtn').textContent = t.enabled ? 'Microfone ligado' : 'Microfone desligado'; $('#micBtn').classList.toggle('off', !t.enabled);
+};
+$('#camBtn').onclick = () => {
+  const t = stream.getVideoTracks()[0]; if (!t) return; t.enabled = !t.enabled;
+  $('#camBtn').textContent = t.enabled ? 'Câmera ligada' : 'Câmera desligada'; $('#camBtn').classList.toggle('off', !t.enabled);
+};
 $('#flipBtn').onclick = async () => {
-  facing = facing === 'environment' ? 'user' : 'environment';
+  facing = facing === 'user' ? 'environment' : 'user';
   try{
     const ns = await navigator.mediaDevices.getUserMedia({video: {facingMode: facing, width: {ideal: 1280}, height: {ideal: 720}}});
     const nt = ns.getVideoTracks()[0], old = stream.getVideoTracks()[0];
-    stream.removeTrack(old); old.stop(); stream.addTrack(nt);
-    $('#me').srcObject = stream;
-    const sender = call && call.peerConnection && call.peerConnection.getSenders().find(x => x.track && x.track.kind === 'video');
-    if (sender) await sender.replaceTrack(nt);
+    nt.enabled = old.enabled; stream.removeTrack(old); old.stop(); stream.addTrack(nt);
+    $('#me').srcObject = stream; $('#me').classList.toggle('me', facing === 'user');
+    const snd = camCall && camCall.peerConnection && camCall.peerConnection.getSenders().find(x => x.track && x.track.kind === 'video');
+    if (snd) await snd.replaceTrack(nt);
   }catch(e){ setStatus('Não consegui trocar a câmera'); }
 };
-$('#muteBtn').onclick = () => {
-  muted = !muted; stream.getAudioTracks().forEach(t => t.enabled = !muted);
-  $('#muteBtn').textContent = muted ? 'Ligar meu som' : 'Desligar meu som';
+$('#screenBtn').onclick = async () => {
+  if (myScreen){ stopMyScreen(); return; }
+  try{ myScreen = await navigator.mediaDevices.getDisplayMedia({video: {frameRate: 15}, audio: false}); }
+  catch(e){ return; }
+  myScreen.getVideoTracks()[0].addEventListener('ended', stopMyScreen);
+  myScreenCall = peer.call(HOST(), myScreen, {metadata: {kind: 'screen'}});
+  $('#screenBtn').textContent = 'Parar de compartilhar'; $('#screenBtn').classList.add('go');
 };
+function stopMyScreen(){
+  try{ myScreenCall && myScreenCall.close(); }catch(e){}
+  myScreen && myScreen.getTracks().forEach(t => t.stop());
+  myScreen = null; myScreenCall = null;
+  $('#screenBtn').textContent = 'Compartilhar minha tela'; $('#screenBtn').classList.remove('go');
+}
 $('#endBtn').onclick = () => {
-  ended = true; clearTimeout(retry);
-  try{ call && call.close(); }catch(e){} try{ peer && peer.destroy(); }catch(e){}
+  ended = true; clearTimeout(retry); stopMyScreen();
+  try{ camCall && camCall.close(); }catch(e){} try{ peer && peer.destroy(); }catch(e){}
   stream && stream.getTracks().forEach(t => t.stop());
-  setStatus('Encerrado. Pode fechar esta página.');
-  $('#bar').hidden = true;
+  profCam = profScreen = null; layout();
+  $('#wait').textContent = 'Você saiu da aula. Pode fechar esta página.'; $('#wait').hidden = false;
+  $('#bar').hidden = true; setStatus('Fora da aula');
 };
 })();
 </script>

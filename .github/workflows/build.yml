@@ -1,0 +1,38 @@
+name: Gerar APK da Sala
+
+on:
+  push:
+    branches: [ main ]
+    paths: [ "android/**", ".github/workflows/**" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Compilar
+        run: gradle assembleRelease --stacktrace
+      - name: Renomear
+        run: cp app/build/outputs/apk/release/app-release.apk ../SalaMimi.apk
+      - name: Publicar versão
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: sala-v${{ github.run_number }}
+          name: Sala Mimi Explica v${{ github.run_number }}
+          body: "Baixe o arquivo SalaMimi.apk abaixo e instale no Android."
+          files: SalaMimi.apk
+          make_latest: true

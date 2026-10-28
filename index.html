@@ -52,7 +52,7 @@ input{font:inherit;font-size:22px;letter-spacing:.2em;text-transform:uppercase;t
   <input id="code" maxlength="8" placeholder="CÓDIGO" autocomplete="off" hidden aria-label="Código da sala">
   <div class="err" id="err" hidden></div>
   <a class="btn go" id="appBtn" href="#">Entrar pelo app (Android)</a>
-  <p class="note">Primeira vez? <a href="https://github.com/Mimiliz/lousa-camera/releases/latest/download/SalaMimi.apk" style="color:var(--accent)">Baixe o app Sala Mimi Explica</a>, instale e volte a este link.</p>
+  <p class="note" id="appNote">Primeira vez? <a id="dlLink" href="https://github.com/Mimiliz/lousa-camera/releases/latest/download/SalaMimi.apk" style="color:var(--accent)">Baixe o app Sala Mimi Explica</a>, instale e volte a este link.</p>
   <div class="or">ou</div>
   <button id="startBtn">Entrar pelo navegador</button>
 </div>
@@ -94,10 +94,17 @@ function appLink(){
 }
 function refreshIntro(){
   $('#salaLbl').textContent = sala ? 'Sala ' + sala : '';
-  $('#appBtn').href = sala ? appLink() : '#';
   const android = /Android/i.test(navigator.userAgent);
-  $('#appBtn').hidden = !android; $('#appBtn').nextElementSibling.hidden = !android;
-  document.querySelector('.or').hidden = !android;
+  const windows = /Windows/i.test(navigator.userAgent);
+  if (windows){
+    $('#appBtn').textContent = 'Entrar pelo programa (Windows)';
+    $('#appBtn').href = sala ? 'mimisala://entrar?sala=' + encodeURIComponent(sala) : '#';
+    $('#dlLink').href = 'https://github.com/Mimiliz/lousa-camera/releases/latest/download/SalaMimi-Setup.exe';
+    $('#dlLink').textContent = 'Baixe o programa Sala Mimi Explica';
+  } else $('#appBtn').href = sala ? appLink() : '#';
+  const native = android || windows;
+  $('#appBtn').hidden = !native; $('#appNote').hidden = !native;
+  document.querySelector('.or').hidden = !native;
 }
 if (!sala){ $('#code').hidden = false; $('#introTxt').textContent = 'Digite o código que o professor passou para você.'; }
 $('#code').addEventListener('input', () => { sala = $('#code').value.toUpperCase().replace(/[^A-Z0-9]/g, ''); refreshIntro(); });

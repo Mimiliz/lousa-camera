@@ -207,8 +207,7 @@ class MainActivity : AppCompatActivity() {
         background = pill(bg, 14f); minHeight = dpi(52f); setOnClickListener { onClick() }
     }
 
-    // cada aula ganha um código novo: quem tem o código de uma aula antiga não entra na seguinte
-    private fun roomCode(): String = newCode()
+    private fun roomCode(): String = prefs.getString("sala", null) ?: newCode().also { prefs.edit().putString("sala", it).apply() }
     private fun newCode(): String {
         val abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
         return (1..6).map { abc[(Math.random() * abc.length).toInt()] }.joinToString("")
@@ -229,7 +228,7 @@ class MainActivity : AppCompatActivity() {
         // aluno: o Android bloqueia print e gravação de tela deste app
         if (papel == Papel.ALUNO) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        inCall = true; leaving = false; busy = false; teacherMuted = false; studentMuted = false; studentMicOn = null
+        inCall = true; leaving = false; teacherMuted = false; studentMuted = false; studentMicOn = null
         val r = Rtc(this); rtc = r
         buildCallUi(r)
         val am = getSystemService(AudioManager::class.java)
@@ -253,8 +252,8 @@ class MainActivity : AppCompatActivity() {
         status(if (papel == Papel.PROFESSOR) "Abrindo a sala $sala…" else "Conectando…")
         sig!!.connect()
         if (Build.VERSION.SDK_INT >= 31) setPictureInPictureParams(pipParams())
-        if (papel == Papel.PROFESSOR) {
-            ui.postDelayed({ if (inCall) invite() }, 600)
+        if (papel == Papel.PROFESSOR && prefs.getBoolean("primeiraVez", true)) {
+            prefs.edit().putBoolean("primeiraVez", false).apply(); ui.postDelayed({ invite() }, 600)
         }
     }
 
@@ -276,20 +275,12 @@ class MainActivity : AppCompatActivity() {
                 val kind = meta?.optString("kind", "cam") ?: "cam"
                 val sdp = payload.optJSONObject("sdp")?.optString("sdp") ?: return
                 if (kind == "screen") {
-                    if (src != otherPeer) return
                     val c = Call(r, s, src, connId, "screen",
                         onRemoteVideo = { t -> remoteScreen = t; layout() },
                         onEnded = { c -> calls.remove(c.connectionId); remoteScreen = null; layout() })
                     calls[connId] = c
                     c.answer(sdp)
                 } else if (papel == Papel.PROFESSOR) {
-                    if (camCall != null && remoteCam != null && src != otherPeer) {
-                        // já tem um aluno na aula: o novo é barrado
-                        sendCtlTo(src, JSONObject().put("busy", true))
-                        toast("Outra pessoa tentou entrar e foi barrada: a sala é de um aluno por vez.")
-                        return
-                    }
-                    if (src != otherPeer) clearChat()
                     camCall?.let { if (it.peer != src) endOther() else it.end() }
                     otherPeer = src; otherVia = meta?.optString("via", "navegador") ?: "navegador"
                     val c = Call(r, s, src, connId, "cam",
@@ -319,16 +310,14 @@ class MainActivity : AppCompatActivity() {
     private var lastDial = 0L
 
     /** Recados entre professor e aluno (passam pelo mesmo servidor de encontro). */
-    private fun sendCtlTo(dst: String, o: JSONObject) {
-        sig?.send("CANDIDATE", dst, JSONObject().put("type", "media").put("connectionId", "ctl").put("ctl", o))
+    private fun sendCtl(o: JSONObject) {
+        val p = otherPeer ?: return
+        sig?.send("CANDIDATE", p, JSONObject().put("type", "media").put("connectionId", "ctl").put("ctl", o))
     }
-    private fun sendCtl(o: JSONObject) { otherPeer?.let { sendCtlTo(it, o) } }
     private fun sendMicState() { sendCtl(JSONObject().put("micOn", rtc?.micTrack?.enabled() == true)) }
 
     private fun onCtl(src: String, c: JSONObject) {
         if (src != otherPeer) return
-        if (c.has("chat")) { addMsg(c.optString("chat").take(2000), false); return }
-        if (papel == Papel.ALUNO && c.optBoolean("busy")) { roomBusy(); return }
         if (papel == Papel.ALUNO && c.has("mute")) {
             teacherMuted = c.optBoolean("mute")
             rtc?.micTrack?.setEnabled(!teacherMuted)
@@ -372,19 +361,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Aluno: liga para a sala do professor. */
-    private var busy = false
-
-    private fun roomBusy() {
-        busy = true
-        val old = camCall; camCall = null; old?.end()
-        remoteCam = null; remoteScreen = null; layout()
-        status("A sala está ocupada")
-        waitTv.text = "O professor já está em aula com outro aluno.\nConfira se o código está certo ou peça um código novo."
-        waitTv.visibility = View.VISIBLE
-    }
-
     private fun dial() {
-        if (!inCall || papel != Papel.ALUNO || busy) return
+        if (!inCall || papel != Papel.ALUNO) return
         val r = rtc ?: return
         val s = sig ?: return
         if (!s.isOpen) return
@@ -488,7 +466,6 @@ class MainActivity : AppCompatActivity() {
             btn("gravar", Icons.GRAVAR, "Gravar aula") { toggleRecord() }
             btn("convidar", Icons.CONVIDAR, "Convidar") { invite() }
         }
-        btn("chat", Icons.CHAT, "Chat") { toggleChat() }
         btn("sair", Icons.SAIR, "Sair") { confirmLeave() }
         (buttons["sair"]!!.first.background as GradientDrawable).setColor(0xFFFF4A4F.toInt())
         (buttons["gravar"]?.first?.drawable as? IconDrawable)?.color = 0xFFFF4A4F.toInt()
@@ -498,96 +475,8 @@ class MainActivity : AppCompatActivity() {
         }
         bottomBar = scroll
         root.addView(scroll, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
-        buildChat(root)
         setContentView(root)
         layout()
-    }
-
-    // ================= chat =================
-
-    private lateinit var chatPanel: LinearLayout
-    private lateinit var msgList: LinearLayout
-    private lateinit var msgScroll: android.widget.ScrollView
-    private lateinit var chatIn: EditText
-    private var unread = 0
-
-    private fun buildChat(root: FrameLayout) {
-        chatPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; setBackgroundColor(0xF714161B.toInt()); visibility = View.GONE
-            isClickable = true; elevation = dp(12f)
-        }
-        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dpi(16f), dpi(8f), dpi(6f), dpi(8f)) }
-        head.addView(TextView(this).apply { text = "Chat da aula"; setTextColor(FG); textSize = 16f; typeface = Typeface.DEFAULT_BOLD }, LinearLayout.LayoutParams(0, -2, 1f))
-        head.addView(TextView(this).apply {
-            text = "×"; setTextColor(MUTED); textSize = 26f; gravity = Gravity.CENTER; contentDescription = "Fechar chat"
-            setOnClickListener { toggleChat() }
-        }, LinearLayout.LayoutParams(dpi(44f), dpi(44f)))
-        chatPanel.addView(head)
-        msgList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dpi(12f), dpi(8f), dpi(12f), dpi(8f)) }
-        msgScroll = android.widget.ScrollView(this).apply { addView(msgList) }
-        chatPanel.addView(msgScroll, LinearLayout.LayoutParams(-1, 0, 1f))
-        val inRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dpi(10f), dpi(8f), dpi(10f), dpi(10f)) }
-        chatIn = EditText(this).apply {
-            hint = "Escreva uma mensagem"; setTextColor(FG); setHintTextColor(MUTED); textSize = 15f
-            background = pill(RAISED, 12f); setPadding(dpi(12f), dpi(10f), dpi(12f), dpi(10f)); maxLines = 4
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        }
-        inRow.addView(chatIn, LinearLayout.LayoutParams(0, -2, 1f))
-        inRow.addView(TextView(this).apply {
-            text = "Enviar"; setTextColor(0xFF06281D.toInt()); typeface = Typeface.DEFAULT_BOLD; gravity = Gravity.CENTER
-            background = pill(ACCENT, 12f); setPadding(dpi(16f), 0, dpi(16f), 0); setOnClickListener { sendChat() }
-        }, LinearLayout.LayoutParams(-2, dpi(46f)).apply { marginStart = dpi(8f) })
-        chatPanel.addView(inRow)
-        val w = dpi(360f).coerceAtMost(resources.displayMetrics.widthPixels)
-        root.addView(chatPanel, FrameLayout.LayoutParams(w, -1, Gravity.END))
-        clearChat()
-    }
-
-    private fun toggleChat() {
-        val open = chatPanel.visibility != View.VISIBLE
-        chatPanel.visibility = if (open) View.VISIBLE else View.GONE
-        if (open) { unread = 0; paintUnread(); chatIn.requestFocus() }
-        else (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(chatIn.windowToken, 0)
-        setActive("chat", open, buttons["chat"]?.second?.text?.toString() ?: "Chat")
-        paintUnread()
-    }
-
-    private fun paintUnread() { buttons["chat"]?.second?.text = if (unread > 0) "Chat ($unread)" else "Chat" }
-
-    private fun sendChat() {
-        val t = chatIn.text.toString().trim()
-        if (t.isEmpty()) return
-        if (otherPeer == null || remoteCam == null) { toast(if (papel == Papel.PROFESSOR) "Nenhum aluno na sala agora" else "Você ainda não está conectado ao professor"); return }
-        sendCtl(JSONObject().put("chat", t.take(2000)))
-        addMsg(t, true); chatIn.setText("")
-    }
-
-    private fun clearChat() {
-        if (!::msgList.isInitialized) return
-        msgList.removeAllViews()
-        msgList.addView(TextView(this).apply { text = "As mensagens desta aula aparecem aqui."; setTextColor(MUTED); textSize = 14f; gravity = Gravity.CENTER; setPadding(0, dpi(40f), 0, 0); tag = "vazio" }, LinearLayout.LayoutParams(-1, -2))
-        unread = 0; paintUnread()
-    }
-
-    private fun addMsg(text: String, mine: Boolean) {
-        if (!::msgList.isInitialized) return
-        msgList.findViewWithTag<View>("vazio")?.let { msgList.removeView(it) }
-        val who = if (mine) "Você" else if (papel == Papel.PROFESSOR) "Aluno" else "Professor"
-        val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-        val bubble = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL; background = pill(if (mine) 0xFF1F5C48.toInt() else RAISED, 14f)
-            setPadding(dpi(12f), dpi(8f), dpi(12f), dpi(8f))
-        }
-        bubble.addView(TextView(this).apply { this.text = "$who · $hora"; setTextColor(MUTED); textSize = 11f })
-        bubble.addView(TextView(this).apply { this.text = text; setTextColor(FG); textSize = 15f; setTextIsSelectable(papel == Papel.PROFESSOR) })
-        msgList.addView(bubble, LinearLayout.LayoutParams(-2, -2).apply {
-            gravity = if (mine) Gravity.END else Gravity.START; bottomMargin = dpi(8f)
-            if (mine) marginStart = dpi(40f) else marginEnd = dpi(40f)
-        })
-        msgScroll.post { msgScroll.fullScroll(View.FOCUS_DOWN) }
-        if (!mine && (chatPanel.visibility != View.VISIBLE || isInPictureInPictureMode)) {
-            unread++; paintUnread(); toast((if (papel == Papel.PROFESSOR) "Aluno: " else "Professor: ") + text.take(80))
-        }
     }
 
     private fun setOn(key: String, on: Boolean, labelOn: String, labelOff: String, iconOn: String? = null, iconOff: String? = null) {
@@ -803,7 +692,7 @@ class MainActivity : AppCompatActivity() {
             setTextIsSelectable(true); setPadding(0, dpi(12f), 0, dpi(4f))
         })
         box.addView(TextView(this).apply {
-            text = "Este código vale só para esta aula. No Android o aluno pode entrar pelo app Sala Mimi Explica, com print e gravação bloqueados. Pelo navegador (iPhone, computador) ele entra, mas sem esse bloqueio."
+            text = "No Android o aluno pode entrar pelo app Sala Mimi Explica, com print e gravação bloqueados. Pelo navegador (iPhone, computador) ele entra, mas sem esse bloqueio."
             setTextColor(MUTED); textSize = 13f; gravity = Gravity.CENTER
         })
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
@@ -817,6 +706,7 @@ class MainActivity : AppCompatActivity() {
             .setNeutralButton("Trocar código") { _, _ ->
                 AlertDialog.Builder(this).setMessage("Criar um código novo? O link antigo deixa de funcionar e a sala reabre.")
                     .setPositiveButton("Trocar") { _, _ ->
+                        prefs.edit().putString("sala", newCode()).apply()
                         leave(); start(Papel.PROFESSOR, roomCode())
                     }.setNegativeButton("Cancelar", null).show()
             }
@@ -843,7 +733,6 @@ class MainActivity : AppCompatActivity() {
         if (!::topBar.isInitialized) return
         val v = if (isInPip) View.GONE else View.VISIBLE
         topBar.visibility = v; bottomBar.visibility = v; miniCol.visibility = v
-        if (isInPip && ::chatPanel.isInitialized && chatPanel.visibility == View.VISIBLE) toggleChat()
         layout()
     }
 

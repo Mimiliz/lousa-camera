@@ -65,6 +65,5 @@ object Icons {
     const val CONVIDAR = "M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M19 8v6M16 11h6"
     const val MIC_TROCAR = "M9 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M3 10a6 6 0 0 0 12 0 M9 16v4 M17 8l3 3-3 3 M20 11h-5"
     const val ALUNO_MUDO = "M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M16 9l5 5M21 9l-5 5"
-    const val CHAT = "M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z M8 10h8 M8 13h5"
     const val SAIR = "M10 17l5-5-5-5 M15 12H3 M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"
 }

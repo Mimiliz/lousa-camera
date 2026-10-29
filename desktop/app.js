@@ -21,6 +21,7 @@ const ICON = {
   gravar: 'M12 4a8 8 0 1 1 0 16a8 8 0 1 1 0-16z',
   convidar: 'M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M19 8v6M16 11h6',
   mini: 'M3 5h18v14H3z M12 12h7v5h-7z',
+  chat: 'M4 5h16a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H9l-5 4V6a1 1 0 0 1 1-1z M8 10h8 M8 13h5',
   micSel: 'M9 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3z M3 10a6 6 0 0 0 12 0 M9 16v4 M17 8l3 3-3 3 M20 11h-5',
   alunoMudo: 'M9 11a4 4 0 1 0 0-8a4 4 0 0 0 0 8z M2 21v-1a6 6 0 0 1 12 0v1 M16 9l5 5M21 9l-5 5',
   sair: 'M10 17l5-5-5-5 M15 12H3 M14 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5'
@@ -31,7 +32,8 @@ let toastT = null;
 function toast(t){ const e = $('#toast'); e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => e.hidden = true, 3500); }
 const rnd = () => Math.random().toString(36).slice(2, 12);
 function newCode(){ const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; let s = ''; for (let i = 0; i < 6; i++) s += abc[Math.floor(Math.random() * abc.length)]; return s; }
-function roomCode(){ let c = store.get('sala', ''); if (!c){ c = newCode(); store.set('sala', c); } return c; }
+// cada aula ganha um código novo: quem tem o código de uma aula antiga não entra na seguinte
+function roomCode(){ return newCode(); }
 
 /* ================= estado da aula ================= */
 let papel = null, sala = '', peer = null, local = null;
@@ -46,12 +48,15 @@ let studentMicOn = null;      // professor: o aluno está com o microfone ligado
 let localMicNode = null;
 
 /* recados entre professor e aluno (passam pelo mesmo servidor de encontro) */
-function sendCtl(obj){
-  try{ if (peer && peer.open && otherPeer) peer.socket.send({type: 'CANDIDATE', dst: otherPeer, payload: {type: 'media', connectionId: 'ctl', ctl: obj}}); }catch(e){}
+function sendCtlTo(dst, obj){
+  try{ if (peer && peer.open && dst) peer.socket.send({type: 'CANDIDATE', dst, payload: {type: 'media', connectionId: 'ctl', ctl: obj}}); }catch(e){}
 }
+function sendCtl(obj){ sendCtlTo(otherPeer, obj); }
 function sendMicState(){ const t = local && local.getAudioTracks()[0]; sendCtl({micOn: !!(t && t.enabled)}); }
 function onCtl(src, c){
   if (src !== otherPeer) return;
+  if (typeof c.chat === 'string'){ addMsg(c.chat.slice(0, 2000), false); return; }
+  if (papel === 'aluno' && c.busy){ roomBusy(); return; }
   if (papel === 'aluno' && typeof c.mute === 'boolean'){
     teacherMuted = c.mute;
     const t = local && local.getAudioTracks()[0]; if (t) t.enabled = !c.mute;
@@ -102,12 +107,12 @@ async function start(p, code){
   }
   if (papel === 'aluno' && api.protect) api.protect(true);   // print e gravação de tela ficam pretos
   if (papel === 'professor' && api.protect) api.protect(false);
-  inCall = true; leaving = false; teacherMuted = false; studentMuted = false; studentMicOn = null;
+  inCall = true; leaving = false; busy = false; clearChat(); teacherMuted = false; studentMuted = false; studentMicOn = null;
   $('#home').hidden = true; $('#call').hidden = false;
   $('#me').srcObject = local;
   buildBar(); layout();
   connect();
-  if (papel === 'professor' && store.get('primeiraVez', '1') === '1'){ store.set('primeiraVez', '0'); setTimeout(invite, 500); }
+  if (papel === 'professor') setTimeout(invite, 500);
 }
 function camConstraints(id){ return id ? {deviceId: {exact: id}, width: {ideal: 1280}, height: {ideal: 720}} : {width: {ideal: 1280}, height: {ideal: 720}}; }
 function setStatus(t){ $('#status').textContent = t; }
@@ -139,13 +144,22 @@ function onIncoming(call){
   const meta = call.metadata || {};
   const kind = meta.kind || 'cam';
   if (kind === 'screen'){
+    if (call.peer !== otherPeer){ try{ call.close(); }catch(e){} return; }
     call.answer();
     call.on('stream', s => { remoteScreen = s; watchEnd(s, () => { if (remoteScreen === s){ remoteScreen = null; layout(); } }); layout(); });
     call.on('close', () => { remoteScreen = null; layout(); });
     return;
   }
   if (papel !== 'professor') return;
+  if (camCall && remoteCam && call.peer !== otherPeer){
+    // já tem um aluno na aula: o novo é barrado
+    sendCtlTo(call.peer, {busy: true});
+    setTimeout(() => { try{ call.close(); }catch(e){} }, 500);
+    toast('Outra pessoa tentou entrar e foi barrada: a sala é de um aluno por vez.');
+    return;
+  }
   if (camCall){ try{ camCall.close(); }catch(e){} }
+  if (call.peer !== otherPeer) clearChat();
   otherPeer = call.peer; otherVia = meta.via || 'navegador';
   camCall = call;
   call.answer(local);
@@ -160,8 +174,17 @@ function watchEnd(s, done){
   t.addEventListener('mute', () => setTimeout(() => { if (t.muted) done(); }, 2500));
 }
 
+let busy = false;
+function roomBusy(){
+  busy = true;
+  const old = camCall; camCall = null; if (old){ try{ old.close(); }catch(e){} }
+  remoteCam = null; remoteScreen = null; layout();
+  setStatus('A sala está ocupada');
+  $('#wait').textContent = 'O professor já está em aula com outro aluno.\nConfira se o código está certo ou peça um código novo.';
+  $('#wait').hidden = false;
+}
 function dial(){
-  if (!inCall || papel !== 'aluno' || !peer || !peer.open) return;
+  if (!inCall || papel !== 'aluno' || !peer || !peer.open || busy) return;
   const now = Date.now(); if (now - lastDial < 2500) return; lastDial = now;
   const old = camCall; camCall = null; if (old){ try{ old.close(); }catch(e){} }
   otherPeer = 'mimisala-' + sala;
@@ -212,6 +235,7 @@ function buildBar(){
     add('gravar', ICON.gravar, 'Gravar aula', toggleRecord);
     add('convidar', ICON.convidar, 'Convidar', invite);
   }
+  add('chat', ICON.chat, 'Chat', toggleChat, 'keep');
   add('mini', ICON.mini, 'Janela pequena', toggleMini, 'keep');
   add('sair', ICON.sair, 'Sair', confirmLeave, 'danger');
 }
@@ -319,6 +343,41 @@ function stopShare(){
   setBtn('tela', 'Compartilhar tela', '');
 }
 
+/* ================= chat ================= */
+let unread = 0;
+const hhmm = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+function addMsg(text, mine){
+  const box = $('#msgs'); const e = box.querySelector('.empty'); if (e) e.remove();
+  const m = document.createElement('div'); m.className = 'msg' + (mine ? ' mine' : '');
+  const who = mine ? 'Você' : (papel === 'professor' ? 'Aluno' : 'Professor');
+  m.innerHTML = '<small></small>'; m.querySelector('small').textContent = who + ' · ' + hhmm();
+  m.append(document.createTextNode(text));
+  box.append(m); box.scrollTop = box.scrollHeight;
+  if (!mine && ($('#chat').hidden || document.body.classList.contains('mini-mode'))){ unread++; paintUnread(); toast((papel === 'professor' ? 'Aluno: ' : 'Professor: ') + text.slice(0, 80)); }
+}
+function paintUnread(){
+  const b = $('#b-chat'); if (!b) return;
+  let bd = b.querySelector('.badge');
+  if (!unread){ if (bd) bd.remove(); return; }
+  if (!bd){ bd = document.createElement('span'); bd.className = 'badge'; b.append(bd); }
+  bd.textContent = unread > 9 ? '9+' : unread;
+}
+function clearChat(){ $('#msgs').innerHTML = '<div class="empty">As mensagens desta aula aparecem aqui.</div>'; unread = 0; paintUnread(); }
+function toggleChat(){
+  if (miniOn) toggleMini();
+  const open = $('#chat').hidden;
+  $('#chat').hidden = !open; setBtn('chat', 'Chat', open ? 'on' : '');
+  if (open){ unread = 0; paintUnread(); setTimeout(() => $('#chatIn').focus(), 50); }
+}
+$('#chatClose').onclick = toggleChat;
+$('#chatForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const t = $('#chatIn').value.trim(); if (!t) return;
+  if (!otherPeer || !remoteCam){ toast(papel === 'professor' ? 'Nenhum aluno na sala agora' : 'Você ainda não está conectado ao professor'); return; }
+  sendCtl({chat: t.slice(0, 2000)}); addMsg(t, true); $('#chatIn').value = '';
+});
+$('#chatIn').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); $('#chatForm').requestSubmit(); } });
+
 function toggleMini(){
   miniOn = !miniOn;
   document.body.classList.toggle('mini-mode', miniOn);
@@ -387,7 +446,7 @@ function invite(){
   const box = modal(`<h3>Convidar o aluno</h3>
     <div class="qr">${qrHtml}</div>
     <div class="link">${esc(link)}</div>
-    <p>Código da sala: <b style="color:var(--fg);letter-spacing:.15em">${sala}</b>. O link continua o mesmo nas próximas aulas.</p>
+    <p>Código da sala: <b style="color:var(--fg);letter-spacing:.15em">${sala}</b>. Este código vale só para esta aula: na próxima, a sala ganha um código novo.</p>
     <p>Pelo app no Android ou pelo programa no computador, print e gravação de tela ficam bloqueados para o aluno. Pelo navegador ele entra, mas sem esse bloqueio.</p>
     <div class="row"><button id="mNovo">Trocar código</button><button id="mCopy">Copiar link</button><button class="go" id="mOk">Fechar</button></div>`);
   box.querySelector('#mOk').onclick = closeModal;
@@ -404,7 +463,7 @@ function confirmBox(msg, okLabel, onOk){
   box.querySelector('#mYes').onclick = () => {
     closeModal();
     if (onOk) onOk();
-    else { store.set('sala', newCode()); leave(); start('professor', roomCode()); }
+    else { leave(); start('professor', roomCode()); }
   };
 }
 
